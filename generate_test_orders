@@ -1,0 +1,155 @@
+import random
+import datetime
+import requests
+import pandas as pd
+
+# --------------------------------------------------------------------------
+# CONFIGURACIÓN: Ajusta a tu base Airtable
+# --------------------------------------------------------------------------
+BASE_ID         = "appIEZptaG5k4Auvh"
+CLIENT_TABLE    = "tblpi3BYithjP2wI5"
+INVENTARI_TABLE = "tbl4zHZASfatnnCNr"
+COMANDA_TABLE   = "tblydBjfNU9RNCVEl"
+DETALL_TABLE    = "tbllukBPzzo83xCe3"
+
+AIRTABLE_PAT = "patDfe6ImZED5kfAE.efc27c8fe110443953d082a7e16aae214abbde770d3574c4fdf71d3cc10024ce"  # tu token con permisos
+HEADERS = {
+    "Authorization": f"Bearer {AIRTABLE_PAT}",
+    "Content-Type": "application/json"
+}
+
+# --------------------------------------------------------------------------
+# Funciones Auxiliares
+# --------------------------------------------------------------------------
+def get_airtable_data(url):
+    """ Lee todos los registros de la tabla en 'url' y devuelve un DataFrame con 'record_id'. """
+    records_all = []
+    offset = None
+    while True:
+        params = {}
+        if offset:
+            params["offset"] = offset
+        resp = requests.get(url, headers=HEADERS, params=params)
+        if resp.status_code != 200:
+            print(f"[ERROR GET] {resp.status_code}: {resp.text}")
+            break
+        data = resp.json()
+        records = data.get("records", [])
+        for r in records:
+            fields = r.get("fields", {})
+            fields["record_id"] = r["id"]
+            records_all.append(fields)
+        offset = data.get("offset")
+        if not offset:
+            break
+    return pd.DataFrame(records_all)
+
+def create_airtable_record(base_url, fields):
+    """ Crea 1 registro y devuelve el record_id o None. """
+    payload = {
+        "records": [
+            {"fields": fields}
+        ]
+    }
+    resp = requests.post(base_url, headers=HEADERS, json=payload)
+    if resp.status_code in (200, 201):
+        data = resp.json()
+        rec_id = data["records"][0]["id"]
+        return rec_id
+    else:
+        print(f"[ERROR POST] {resp.status_code}: {resp.text}")
+        return None
+
+def get_existing_clients():
+    """Devuelve la lista de record_ids (clientes ya creados)"""
+    url = f"https://api.airtable.com/v0/{BASE_ID}/{CLIENT_TABLE}"
+    df = get_airtable_data(url)
+    if df.empty or "record_id" not in df.columns:
+        return []
+    return df["record_id"].tolist()
+
+def get_existing_products():
+    """Devuelve la lista de record_ids (productos ya creados)"""
+    url = f"https://api.airtable.com/v0/{BASE_ID}/{INVENTARI_TABLE}"
+    df = get_airtable_data(url)
+    if df.empty or "record_id" not in df.columns:
+        return []
+    return df["record_id"].tolist()
+
+# --------------------------------------------------------------------------
+# 1) Crear comandas en 2025
+# --------------------------------------------------------------------------
+def create_comandes_2025(num_comandes=800, client_ids=None):
+    """Genera 'num_comandes' con Status='Pending', fecha en 2025, y link a un cliente aleatorio."""
+    comanda_url = f"https://api.airtable.com/v0/{BASE_ID}/{COMANDA_TABLE}"
+    comandes_info = []
+
+    start_2025 = datetime.date(2025,1,1)
+    end_2025   = datetime.date(2025,12,31)
+    total_days = (end_2025 - start_2025).days + 1
+
+    for _ in range(num_comandes):
+        offset = random.randint(0, total_days-1)
+        fecha = start_2025 + datetime.timedelta(days=offset)
+        date_str = fecha.isoformat()
+
+        if client_ids:
+            chosen_client = random.choice(client_ids)
+            cust_link = [chosen_client]
+        else:
+            cust_link = []
+
+        fields = {
+            "Status": "Pending",
+            "Data": date_str,  # Asumiendo que 'Data' en Comanda es editable
+            "CustomerID": cust_link
+        }
+        rec_id = create_airtable_record(comanda_url, fields)
+        if rec_id:
+            comandes_info.append((rec_id, fecha))
+    return comandes_info
+
+# --------------------------------------------------------------------------
+# 2) Crear Detalles en 2025 con la misma fecha que la Comanda
+# --------------------------------------------------------------------------
+def create_detalls_2025(comandes_info, product_ids, max_lines=3):
+    """ Para cada Comanda, crea 1..max_lines de Detall comanda con 'Data' = misma fecha. """
+    detall_url = f"https://api.airtable.com/v0/{BASE_ID}/{DETALL_TABLE}"
+
+    for (com_rec_id, fecha) in comandes_info:
+        lines = random.randint(1, max_lines)
+        date_str = fecha.isoformat()
+        for _ in range(lines):
+            if product_ids:
+                chosen_prod = random.choice(product_ids)
+                prod_link = [chosen_prod]
+            else:
+                prod_link = []
+            qty = random.randint(1,10)
+
+            fields = {
+                "Comanda": [com_rec_id],
+                "ProductID": prod_link,
+                "Quantity": qty,
+                "Data": date_str  # Sólo si 'Data' en Detall comanda es editable
+            }
+            _ = create_airtable_record(detall_url, fields)
+
+# --------------------------------------------------------------------------
+# MAIN
+# --------------------------------------------------------------------------
+def main():
+    # 1) Leer clientes y productos que ya existen
+    clients = get_existing_clients()
+    products= get_existing_products()
+
+    # 2) Crear X comandas en 2025
+    comandes_info = create_comandes_2025(num_comandes=800, client_ids=clients)
+    print("Comandas 2025 creadas:", comandes_info)
+
+    # 3) Crear Detalles
+    create_detalls_2025(comandes_info, products, max_lines=3)
+    print("Detalles 2025 creados con éxito!")
+
+if __name__ == "__main__":
+    main()
